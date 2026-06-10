@@ -112,8 +112,12 @@ def get_event(url: str, event_id: int, quiet=False, verbose=False) -> dict:
 def main():
     program_url = 'https://www.medeltidsveckan.se/programme/'
     details_url = 'https://www.medeltidsveckan.se/'
-    ids_filepath = Path(__file__).parent / 'event_ids.json'
-    events_filepath = Path(__file__).parent / 'events_v1.json'
+    data_directory = Path(__file__).parent / 'data'
+    ids_filepath = data_directory / 'event_ids.json'
+    events_filepath = data_directory / 'events_v1.json'
+
+    # Ensure data directory exists.
+    data_directory.mkdir(exist_ok=True)
 
     # Parse and save event IDs.
     print('Gettings IDs')
