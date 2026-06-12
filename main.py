@@ -80,7 +80,7 @@ def get_event(url: str, event_id: int, quiet=False, verbose=False) -> dict:
         event['siblings'] = []
         for sibling in siblings.values():
             timestamp = int(sibling['timestamp'])
-            date = datetime.date.fromtimestamp(timestamp)
+            date = datetime.datetime.fromtimestamp(timestamp, datetime.UTC).date()
             event['siblings'].append({
                 'date': str(date),
                 'weekday': unescape(sibling['day']),
