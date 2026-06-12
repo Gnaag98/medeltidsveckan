@@ -138,6 +138,20 @@ def get_ticket_price_range(ticket_id: int, quiet=False) -> tuple[int, int] | Non
     return (min_price, max_price)
 
 
+def get_sibling_id(sibling: dict, schedule: dict) -> int:
+    date = sibling['date']
+    start_hour, start_minute = sibling['start_time'].split(':')
+    title = sibling['title']
+
+    nearest_half_hour = int(start_minute) // 30 * 30
+    rounded_time = f'{start_hour}:{nearest_half_hour:02d}'
+
+    times = schedule[date]
+    events = times[rounded_time]
+    event_id = next(event['event_id'] for event in events if event['title'] == title)
+    return event_id
+
+
 def main():
     program_url = 'https://www.medeltidsveckan.se/programme/'
     details_url = 'https://www.medeltidsveckan.se/'
@@ -208,6 +222,25 @@ def main():
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
     print('Updated saved events with ticket prices.')
+    #"""
+
+    # Update saved events with sibling IDs.
+    #"""
+    print('Updating saved events with sibling IDs')
+    with open(schedule_filepath, 'r', encoding='utf-8') as file:
+        schedule = json.load(file)
+    with open(events_filepath, 'r', encoding='utf-8') as file:
+        events = json.load(file)
+    for event_id, event in events.items():
+        if siblings := event.get('siblings'):
+            print(event_id)
+            for sibling in siblings:
+                sibling_id = get_sibling_id(sibling, schedule)
+                sibling['event_id'] = sibling_id
+                print('-', sibling_id)
+    with open(events_filepath, 'w', encoding='utf-8') as file:
+        json.dump(events, file, ensure_ascii=False, indent=4)
+    print('Updated saved events with sibling IDs.')
     #"""
 
 
