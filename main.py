@@ -11,10 +11,11 @@ TIMEOUT_SECONDS = 5
 NUM_RETRIES = 3
 
 
-def get_simple_schedule(url: str, verbose=False) -> dict:
+def get_simple_schedule(verbose=False) -> dict:
     dates = {}
 
     # Get page.
+    url = 'https://www.medeltidsveckan.se/programme/'
     response = requests.get(url, timeout=TIMEOUT_SECONDS)
     response.raise_for_status()
     soup = BeautifulSoup(response.content, 'html.parser')
@@ -56,8 +57,9 @@ def get_simple_schedule(url: str, verbose=False) -> dict:
     return dates
 
 
-def get_event(url: str, event_id: int, verbose=False) -> dict:
+def get_event(event_id: int, verbose=False) -> dict:
     # Get json.
+    url = 'https://www.medeltidsveckan.se/'
     response = requests.get(
         url,
         params={
@@ -142,8 +144,6 @@ def get_sibling_id(sibling: dict, schedule: dict) -> int:
 
 
 def main():
-    program_url = 'https://www.medeltidsveckan.se/programme/'
-    details_url = 'https://www.medeltidsveckan.se/'
     data_directory = Path(__file__).parent / 'data'
     schedule_filepath = data_directory / 'simple_schedule.json'
     events_filepath = data_directory / 'events.json'
@@ -155,7 +155,7 @@ def main():
     #"""
     print('Gettings schedule.')
     try:
-        schedule = get_simple_schedule(program_url, verbose=True)
+        schedule = get_simple_schedule(verbose=True)
         with open(schedule_filepath, 'w', encoding='utf-8') as file:
             json.dump(schedule, file, ensure_ascii=False, indent=4)
         print('Schedule saved.')
@@ -179,7 +179,7 @@ def main():
         event = None
         while event is None and num_failed_attempts < NUM_RETRIES:
             try:
-                event = get_event(details_url, event_id, verbose=True)
+                event = get_event(event_id, verbose=True)
             except requests.exceptions.ReadTimeout:
                 num_failed_attempts += 1
                 print(f'Attempt {num_failed_attempts}/{NUM_RETRIES} to get info for event {event_id} timeout.')
