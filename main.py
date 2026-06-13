@@ -35,27 +35,28 @@ def get_simple_schedule(url: str, verbose=False) -> dict:
         time_views = day_element.select('.time-view')
         for time_view in time_views:
             events = []
-            time_string = time_view.select_one('h4').string
+            time_slot = time_view.select_one('h4').string
             if verbose:
-                print('-', time_string)
+                print('-', time_slot)
 
             # Get events.
-            for event in time_view.select('article'):
-                event_id = int(event['data-pid'])
-                title = unescape(event.select_one('strong').string)
+            for article in time_view.select('article'):
+                event = {}
+                event['event_id'] = int(article['data-pid'])
+                event['title'] = unescape(article.select_one('strong').string)
+                event['start_time'] = article.select_one('span').string
+                if footer := article.select_one('.card-footer').string:
+                    event['category'] = footer.strip()
                 if verbose:
-                    print('  -', event_id, title)
-                events.append({
-                    'event_id': event_id,
-                    'title': title,
-                })
+                    print('  -', event['event_id'], event['title'])
+                events.append(event)
 
-            times[time_string] = events
+            times[time_slot] = events
         dates[date_string] = times
     return dates
 
 
-def get_event(url: str, event_id: int, quiet=False, verbose=False) -> dict:
+def get_event(url: str, event_id: int, verbose=False) -> dict:
     # Get json.
     response = requests.get(
         url,
@@ -96,25 +97,12 @@ def get_event(url: str, event_id: int, quiet=False, verbose=False) -> dict:
     if ticket_url := details['sidebar']['ticket_link']:
         ticket_id = int(ticket_url.split('/')[-1])
         event['ticket_id'] = ticket_id
-    if not quiet:
-        if verbose:
-            print(json.dumps(event, indent=4, ensure_ascii=False))
-        else:
-            print('-', event_id, event['weekday'], event['start_time'], event['title'])
-
-    # DEBUG validation.
-    for k, v in event.items():
-        if v is None:
-            print(json.dumps(event, indent=4, ensure_ascii=False))
-            raise RuntimeError(f'{k} in event {event_id} is None')
-        if v == "":
-            print(json.dumps(event, indent=4, ensure_ascii=False))
-            raise RuntimeError(f'{k} in event {event_id} is empty')
-
+    if verbose:
+        print('-', event_id, event['weekday'], event['start_time'], event['title'])
     return event
 
 
-def get_ticket_price_range(ticket_id: int, quiet=False) -> tuple[int, int] | None:
+def get_ticket_price_range(ticket_id: int, verbose=False) -> tuple[int, int] | None:
     # Get json.
     url = f'https://www.nortic.se/api/json/show/{ticket_id}'
     response = requests.get(url, timeout=TIMEOUT_SECONDS)
@@ -128,8 +116,8 @@ def get_ticket_price_range(ticket_id: int, quiet=False) -> tuple[int, int] | Non
     show = events[0]['shows'][0]
     min_price = int(float(show['minPrice']))
     max_price = int(float(show['maxPrice']))
-    if not quiet:
-        print(f'{ticket_id}: ', end='')
+    if verbose:
+        print(f'- {ticket_id}: ', end='')
         if min_price == max_price:
             print(f'{min_price:4d}')
         else:
@@ -140,16 +128,17 @@ def get_ticket_price_range(ticket_id: int, quiet=False) -> tuple[int, int] | Non
 
 def get_sibling_id(sibling: dict, schedule: dict) -> int:
     date = sibling['date']
-    start_hour, start_minute = sibling['start_time'].split(':')
+    start_time = sibling['start_time']
+    start_hour, start_minute = start_time.split(':')
     title = sibling['title']
 
-    nearest_half_hour = int(start_minute) // 30 * 30
-    rounded_time = f'{start_hour}:{nearest_half_hour:02d}'
+    earliest_half_hour = int(start_minute) // 30 * 30
+    time_slot = f'{start_hour}:{earliest_half_hour:02d}'
 
     times = schedule[date]
-    events = times[rounded_time]
-    event_id = next(event['event_id'] for event in events if event['title'] == title)
-    return event_id
+    events = times[time_slot]
+    event = next(event for event in events if event['start_time'] == start_time and event['title'] == title)
+    return event['event_id']
 
 
 def main():
@@ -166,7 +155,7 @@ def main():
     #"""
     print('Gettings schedule.')
     try:
-        schedule = get_simple_schedule(program_url)
+        schedule = get_simple_schedule(program_url, verbose=True)
         with open(schedule_filepath, 'w', encoding='utf-8') as file:
             json.dump(schedule, file, ensure_ascii=False, indent=4)
         print('Schedule saved.')
@@ -190,7 +179,7 @@ def main():
         event = None
         while event is None and num_failed_attempts < NUM_RETRIES:
             try:
-                event = get_event(details_url, event_id)
+                event = get_event(details_url, event_id, verbose=True)
             except requests.exceptions.ReadTimeout:
                 num_failed_attempts += 1
                 print(f'Attempt {num_failed_attempts}/{NUM_RETRIES} to get info for event {event_id} timeout.')
@@ -211,7 +200,7 @@ def main():
         events = json.load(file)
     for event in events.values():
         if ticket_id := event.get('ticket_id'):
-            if price_range := get_ticket_price_range(ticket_id):
+            if price_range := get_ticket_price_range(ticket_id, verbose=True):
                 min_price = price_range[0]
                 max_price = price_range[1]
                 if min_price == max_price:
