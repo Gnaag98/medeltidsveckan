@@ -180,10 +180,10 @@ def main():
         while event is None and num_failed_attempts < NUM_RETRIES:
             try:
                 event = get_event(event_id, verbose=True)
+                break
             except requests.exceptions.ReadTimeout:
                 num_failed_attempts += 1
                 print(f'Attempt {num_failed_attempts}/{NUM_RETRIES} to get info for event {event_id} timeout.')
-            break
         if event is None:
             print(f'Failed to parse event {event_id}.')
             continue
