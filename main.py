@@ -2,6 +2,7 @@ from collections.abc import Iterable, Iterator
 import datetime
 from html import unescape
 import json
+import logging
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -10,12 +11,36 @@ import requests
 TIMEOUT_SECONDS = 5
 NUM_RETRIES = 3
 
+logger = logging.getLogger(__name__)
+
+
+def debug_and_print(message: str):
+    logger.debug(message)
+    print(message)
+
+
+def info_and_print(message: str):
+    logger.info(message)
+    print(message)
+
+
+def warning_and_print(message: str):
+    logger.warning(message)
+    print(message)
+
+
+def error_and_print(message: str):
+    logger.error(message)
+    print(message)
+
 
 def get_simple_schedule(verbose=False) -> dict:
     dates = {}
+    num_events = 0
 
     # Get page.
     url = 'https://www.medeltidsveckan.se/programme/'
+    logger.info(f'Getting schedule from {url}')
     response = requests.get(url, timeout=TIMEOUT_SECONDS)
     response.raise_for_status()
     soup = BeautifulSoup(response.content, 'html.parser')
@@ -26,11 +51,26 @@ def get_simple_schedule(verbose=False) -> dict:
     # Get days.
     days = soup.select('.day')
     for day_index, day_element in enumerate(days):
-        times = {}
+        day = {
+            'opening_hours': [],
+            'times': {},
+        }
         date_string = day_element.get('id').removeprefix('date-')
         if verbose:
             weekday = weekdays[day_index]
             print(weekday, date_string)
+
+        # Get opening hours.
+        if hours_element := day_element.select_one(f'#hours-{date_string}'):
+            for hour_element in hours_element.select('a'):
+                time_element, title_element = hour_element.select('div')
+                start_time, end_time = time_element.string.split('-')
+                day['opening_hours'].append({
+                    'event_id': int(hour_element['data-pid']),
+                    'title': title_element.string,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                })
 
         # Get time slots.
         time_views = day_element.select('.time-view')
@@ -51,9 +91,11 @@ def get_simple_schedule(verbose=False) -> dict:
                 if verbose:
                     print('  -', event['event_id'], event['title'])
                 events.append(event)
+                num_events += 1
 
-            times[time_slot] = events
-        dates[date_string] = times
+            day['times'][time_slot] = events
+        dates[date_string] = day
+    logger.info(f'Schedule contains {num_events} events')
     return dates
 
 
@@ -137,40 +179,58 @@ def get_sibling_id(sibling: dict, schedule: dict) -> int:
     earliest_half_hour = int(start_minute) // 30 * 30
     time_slot = f'{start_hour}:{earliest_half_hour:02d}'
 
-    times = schedule[date]
-    events = times[time_slot]
-    event = next(event for event in events if event['start_time'] == start_time and event['title'] == title)
+    day = schedule[date]
+    event = None
+    # Try get time slot event.
+    if events := day['times'].get(time_slot):
+        event = next((event for event in events if event['start_time'] == start_time and event['title'] == title), None)
+    # Else get opening hours event.
+    if event is None:
+        events = day['opening_hours']
+        event = next(event for event in events if event['start_time'] == start_time and event['title'] == title)
     return event['event_id']
 
 
 def main():
+    log_filepath = Path('main.log')
     data_directory = Path(__file__).parent / 'data'
     schedule_filepath = data_directory / 'simple_schedule.json'
     events_filepath = data_directory / 'events.json'
+
+    # Setup logger.
+    logging.basicConfig(
+        filename=log_filepath,
+        level=logging.INFO,
+        style='{',
+        format='{asctime}:{levelname}:{name}:{filename}:{lineno}:{message}',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
 
     # Ensure data directory exists.
     data_directory.mkdir(exist_ok=True)
 
     # Parse and save simple schedule.
     #"""
-    print('Gettings schedule.')
+    info_and_print('Gettings schedule')
     try:
         schedule = get_simple_schedule(verbose=True)
         with open(schedule_filepath, 'w', encoding='utf-8') as file:
             json.dump(schedule, file, ensure_ascii=False, indent=4)
-        print('Schedule saved.')
+        info_and_print('Schedule saved.')
     except requests.exceptions.ConnectTimeout:
-        print('Timeout gettings schedule. Skipping to next step.')
+        error_and_print('Timeout getting schedule')
     #"""
 
     # Get and save events.
     #"""
-    print('Gettings events')
+    info_and_print('Gettings events')
     with open(schedule_filepath, 'r') as file:
         schedule = json.load(file)
     event_ids: list[int] = []
-    for times in schedule.values():
-        for events in times.values():
+    for day in schedule.values():
+        for event in day['opening_hours']:
+            event_ids.append(event['event_id'])
+        for events in day['times'].values():
             for event in events:
                 event_ids.append(event['event_id'])
     events = {}
@@ -183,19 +243,20 @@ def main():
                 break
             except requests.exceptions.ReadTimeout:
                 num_failed_attempts += 1
-                print(f'Attempt {num_failed_attempts}/{NUM_RETRIES} to get info for event {event_id} timeout.')
+                warning_and_print(f'Timeout getting event [{num_failed_attempts}/{NUM_RETRIES}]')
         if event is None:
-            print(f'Failed to parse event {event_id}.')
+            error_and_print(f'Failed to get event {event_id}')
             continue
         events[event_id] = event
+    info_and_print(f'Got {len(events)}/{len(event_ids)} events')
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
-    print(f'Events saved.')
+    info_and_print(f'Events saved')
     #"""
 
     # Update saved events with ticket prices.
     #"""
-    print('Updating saved events with ticket prices')
+    info_and_print('Updating saved events with ticket prices')
     with open(events_filepath, 'r', encoding='utf-8') as file:
         events = json.load(file)
     for event in events.values():
@@ -210,12 +271,12 @@ def main():
                     event['max_price'] = max_price
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
-    print('Updated saved events with ticket prices.')
+    info_and_print('Updated saved events with ticket prices')
     #"""
 
     # Update saved events with sibling IDs.
     #"""
-    print('Updating saved events with sibling IDs')
+    info_and_print('Updating saved events with sibling IDs')
     with open(schedule_filepath, 'r', encoding='utf-8') as file:
         schedule = json.load(file)
     with open(events_filepath, 'r', encoding='utf-8') as file:
@@ -229,7 +290,7 @@ def main():
                 print('-', sibling_id)
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
-    print('Updated saved events with sibling IDs.')
+    info_and_print('Updated saved events with sibling IDs')
     #"""
 
 
