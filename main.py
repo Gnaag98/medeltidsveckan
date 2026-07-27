@@ -1,12 +1,11 @@
-from collections.abc import Iterable, Iterator
 import datetime
-from html import unescape
 import json
 import logging
+from html import unescape
 from pathlib import Path
 
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup
 
 TIMEOUT_SECONDS = 5
 NUM_RETRIES = 3
@@ -65,12 +64,14 @@ def get_simple_schedule(verbose=False) -> dict:
             for hour_element in hours_element.select('a'):
                 time_element, title_element = hour_element.select('div')
                 start_time, end_time = time_element.string.split('-')
-                day['opening_hours'].append({
-                    'event_id': int(hour_element['data-pid']),
-                    'title': title_element.string,
-                    'start_time': start_time,
-                    'end_time': end_time,
-                })
+                day['opening_hours'].append(
+                    {
+                        'event_id': int(hour_element['data-pid']),
+                        'title': title_element.string,
+                        'start_time': start_time,
+                        'end_time': end_time,
+                    }
+                )
 
         # Get time slots.
         time_views = day_element.select('.time-view')
@@ -106,9 +107,9 @@ def get_event(event_id: int, verbose=False) -> dict:
         url,
         params={
             'action': 'fetch-programme-item',
-            'pid': event_id
+            'pid': event_id,
         },
-        timeout=TIMEOUT_SECONDS
+        timeout=TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     details = response.json()
@@ -126,12 +127,14 @@ def get_event(event_id: int, verbose=False) -> dict:
         for sibling in siblings.values():
             timestamp = int(sibling['timestamp'])
             date = datetime.datetime.fromtimestamp(timestamp, datetime.UTC).date()
-            event['siblings'].append({
-                'date': str(date),
-                'weekday': unescape(sibling['day']),
-                'start_time': unescape(sibling['time']),
-                'title': unescape(sibling['title']),
-            })
+            event['siblings'].append(
+                {
+                    'date': str(date),
+                    'weekday': unescape(sibling['day']),
+                    'start_time': unescape(sibling['time']),
+                    'title': unescape(sibling['title']),
+                }
+            )
     event['weekday'] = details['sidebar']['dayName']
     event['date'] = details['sidebar']['date']
     start, end = details['sidebar']['time'].split(' - ')
@@ -183,11 +186,22 @@ def get_sibling_id(sibling: dict, schedule: dict) -> int:
     event = None
     # Try get time slot event.
     if events := day['times'].get(time_slot):
-        event = next((event for event in events if event['start_time'] == start_time and event['title'] == title), None)
+        event = next(
+            (
+                event
+                for event in events
+                if event['start_time'] == start_time and event['title'] == title
+            ),
+            None,
+        )
     # Else get opening hours event.
     if event is None:
         events = day['opening_hours']
-        event = next(event for event in events if event['start_time'] == start_time and event['title'] == title)
+        event = next(
+            event
+            for event in events
+            if event['start_time'] == start_time and event['title'] == title
+        )
     return event['event_id']
 
 
@@ -210,7 +224,7 @@ def main():
     data_directory.mkdir(exist_ok=True)
 
     # Parse and save simple schedule.
-    #"""
+    # """
     info_and_print('Gettings schedule')
     try:
         schedule = get_simple_schedule(verbose=True)
@@ -219,10 +233,10 @@ def main():
         info_and_print('Schedule saved.')
     except requests.exceptions.ConnectTimeout:
         error_and_print('Timeout getting schedule')
-    #"""
+    # """
 
     # Get and save events.
-    #"""
+    # """
     info_and_print('Gettings events')
     with open(schedule_filepath, 'r') as file:
         schedule = json.load(file)
@@ -251,31 +265,32 @@ def main():
     info_and_print(f'Got {len(events)}/{len(event_ids)} events')
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
-    info_and_print(f'Events saved')
-    #"""
+    info_and_print('Events saved')
+    # """
 
     # Update saved events with ticket prices.
-    #"""
+    # """
     info_and_print('Updating saved events with ticket prices')
     with open(events_filepath, 'r', encoding='utf-8') as file:
         events = json.load(file)
     for event in events.values():
-        if ticket_id := event.get('ticket_id'):
-            if price_range := get_ticket_price_range(ticket_id, verbose=True):
-                min_price = price_range[0]
-                max_price = price_range[1]
-                if min_price == max_price:
-                    event['price'] = max_price
-                else:
-                    event['min_price'] = min_price
-                    event['max_price'] = max_price
+        if (ticket_id := event.get('ticket_id')) and (
+            price_range := get_ticket_price_range(ticket_id, verbose=True)
+        ):
+            min_price = price_range[0]
+            max_price = price_range[1]
+            if min_price == max_price:
+                event['price'] = max_price
+            else:
+                event['min_price'] = min_price
+                event['max_price'] = max_price
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
     info_and_print('Updated saved events with ticket prices')
-    #"""
+    # """
 
     # Update saved events with sibling IDs.
-    #"""
+    # """
     info_and_print('Updating saved events with sibling IDs')
     with open(schedule_filepath, 'r', encoding='utf-8') as file:
         schedule = json.load(file)
@@ -291,8 +306,8 @@ def main():
     with open(events_filepath, 'w', encoding='utf-8') as file:
         json.dump(events, file, ensure_ascii=False, indent=4)
     info_and_print('Updated saved events with sibling IDs')
-    #"""
+    # """
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
