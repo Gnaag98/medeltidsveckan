@@ -7,8 +7,6 @@ import requests
 from bs4 import BeautifulSoup
 from requests.models import Response
 
-from src.log import *
-
 NUM_TIMEOUT_ATTEMPTS = 3
 TIMEOUT_SECONDS = 5
 
@@ -19,13 +17,11 @@ class TimeoutRetryError(Exception):
     pass
 
 
-def scrape_schedule(*, verbose=False) -> dict:
-    days = []
-    num_events = 0
+def scrape_schedule() -> dict:
+    logger.info('Scraping schedule')
 
     # Get page.
     url = 'https://www.medeltidsveckan.se/programme/'
-    logger.info(f'Getting schedule from {url}')
     response = _get_request(url)
     soup = BeautifulSoup(response.content, 'html.parser')
 
@@ -33,6 +29,8 @@ def scrape_schedule(*, verbose=False) -> dict:
     weekdays = tuple(button.text for button in soup.select('#day-list button'))
 
     # Get days.
+    days = []
+    num_events = 0
     day_elements = soup.select('.day')
     for day_index, day_element in enumerate(day_elements):
         date_string = day_element.get('id').removeprefix('date-')
@@ -41,42 +39,38 @@ def scrape_schedule(*, verbose=False) -> dict:
             'venues': [],
             'events': [],
         }
-        if verbose:
-            weekday = weekdays[day_index]
-            print(weekday, date_string)
+        logger.debug(f'Scraping {weekdays[day_index]} {date_string}')
 
         # Get venues (opening hours).
         if hours_element := day_element.select_one(f'#hours-{date_string}'):
             for hour_element in hours_element.select('a'):
+                id_ = int(hour_element['data-pid'])
+                logger.debug(f'Scraping venue {id_} from schedule')
                 time_element, title_element = hour_element.select('div')
                 start_time, end_time = time_element.string.split('-')
                 day['venues'].append(
                     {
-                        'id': int(hour_element['data-pid']),
+                        'id': id_,
                         'title': title_element.string,
                         'start_time': start_time,
                         'end_time': end_time,
                     }
                 )
 
-        # Get time slots.
+        # Get events.
         time_views = day_element.select('.time-view')
         for time_view in time_views:
-            if verbose:
-                time_slot = time_view.select_one('h4').string
-                print('-', time_slot)
-
-            # Get events.
             for article in time_view.select('article'):
                 event = {}
-                id = int(article['data-pid'])
-                event['id'] = id
-                event['title'] = unescape(article.select_one('strong').string)
-                event['start_time'] = article.select_one('span').string
+                id_ = int(article['data-pid'])
+                logger.debug(f'Scraping event {id_} from schedule')
+                title = unescape(article.select_one('strong').string)
+                start_time = article.select_one('span').string
+                event['id'] = id_
+                event['title'] = title
+                event['start_time'] = start_time
                 if footer := article.select_one('.card-footer').string:
                     event['category'] = footer.strip()
-                if verbose:
-                    print('  -', event['id'], event['title'])
                 day['events'].append(event)
                 num_events += 1
 
@@ -86,14 +80,18 @@ def scrape_schedule(*, verbose=False) -> dict:
 
 
 def scrape_events(schedule: dict):
+    logger.info('Scraping events')
     return _scrape_occasions(schedule, 'event')
 
 
 def scrape_venues(schedule: dict):
+    logger.info('Scraping venues')
     return _scrape_occasions(schedule, 'venue')
 
 
-def scrape_ticket_price_range(ticket_id: int, *, verbose=False) -> tuple[int, int] | None:
+def scrape_ticket_price_range(ticket_id: int) -> tuple[int, int] | None:
+    logger.debug(f'Scraping ticket {ticket_id}')
+
     # Get json.
     url = f'https://www.nortic.se/api/json/show/{ticket_id}'
     response = _get_request(url)
@@ -103,16 +101,11 @@ def scrape_ticket_price_range(ticket_id: int, *, verbose=False) -> tuple[int, in
     # Get price range.
     events = data['events']
     if len(events) == 0:
+        logger.warning(f'Found no events for ticket {ticket_id}')
         return None
     show = events[0]['shows'][0]
     min_price = int(float(show['minPrice']))
     max_price = int(float(show['maxPrice']))
-    if verbose:
-        print(f'- {ticket_id}: ', end='')
-        if min_price == max_price:
-            print(f'{min_price:4d}')
-        else:
-            print(f'{min_price:4d} - {max_price:4d}')
 
     return (min_price, max_price)
 
@@ -122,17 +115,17 @@ def _get_request(url: str, *, params=None) -> Response:
 
     params = params if not None else {}
 
-    for _ in range(NUM_TIMEOUT_ATTEMPTS):
+    for i in range(NUM_TIMEOUT_ATTEMPTS):
         try:
             response = requests.get(url, timeout=TIMEOUT_SECONDS, params=params)
             response.raise_for_status()
             return response
         except requests.exceptions.ReadTimeout:
-            pass
+            logger.debug(f'GET request {i + 1}/{NUM_TIMEOUT_ATTEMPTS} failed for {url}')
     raise TimeoutRetryError(f'Too many timeouts for GET request to {url}')
 
 
-def _scrape_occasion(id_: int, *, verbose=False) -> dict:
+def _scrape_occasion(id_: int) -> dict:
     # Get json.
     url = 'https://www.medeltidsveckan.se/'
     response = _get_request(
@@ -177,14 +170,10 @@ def _scrape_occasion(id_: int, *, verbose=False) -> dict:
     if ticket_url := details['sidebar']['ticket_link']:
         ticket_id = int(ticket_url.split('/')[-1])
         occasion['ticket_id'] = ticket_id
-    if verbose:
-        print('-', id_, occasion['weekday'], occasion['start_time'], occasion['title'])
     return occasion
 
 
 def _scrape_occasions(schedule: dict, type_: Literal['event', 'venue']):
-    log_info_and_print(f'Scraping {type_}s')
-
     ids: list[int] = []
     for day in schedule:
         for occasion in day[f'{type_}s']:
@@ -192,16 +181,20 @@ def _scrape_occasions(schedule: dict, type_: Literal['event', 'venue']):
 
     occasions = []
     for i, id_ in enumerate(ids):
-        print(f'Getting {type_} {i + 1}/{len(ids)}: {id_}')
+        logger.debug(f'Scraping details for {type_} {id_} ({i + 1}/{len(ids)})')
+
         try:
             occasion = _scrape_occasion(id_)
             occasions.append(occasion)
         # Skip failed scrapes.
         except TimeoutRetryError as exception:
-            log_error_and_print(f'Failed to get {type_} {id_}: {exception}')
+            logger.error(f'Failed to get {type_} {id_}: {exception}')
             continue
 
-    log_info_and_print(f'Scraped {len(occasions)}/{len(ids)} {type_}s')
+        if (i + 1) % 20 == 0 or i == len(ids) - 1:
+            logger.info(f'{i + 1}/{len(ids)} {type_}s scraped')
+
+    logger.info(f'Scraped {len(occasions)}/{len(ids)} {type_}s')
     return occasions
 
 
@@ -209,14 +202,20 @@ def main():
     """Scrapes schedule, some events and a ticket, and only prints the result."""
     logging.basicConfig(
         filename=f'{__file__}.log',
-        level=logging.INFO,
+        filemode='w',
+        level=logging.DEBUG,
         style='{',
         format='{asctime}:{levelname}:{name}:{filename}:{lineno}:{message}',
         datefmt='%Y-%m-%d %H:%M:%S',
     )
+    console = logging.StreamHandler()
+    console.setLevel(logging.DEBUG)
+    console.setFormatter(logging.Formatter('%(levelname)-8s %(message)s'))
+    logging.getLogger().addHandler(console)
+
     # Scrape schedule
     print('The schedule:')
-    schedule = scrape_schedule(verbose=True)
+    schedule = scrape_schedule()
 
     # Scrape events until a ticket with a price is found
     has_scraped = False
@@ -224,10 +223,10 @@ def main():
     for day in schedule:
         for event in day['events']:
             event_id = event['id']
-            event = _scrape_occasion(event_id, verbose=True)
+            event = _scrape_occasion(event_id)
             if ticket_id := event.get('ticket_id'):
                 print('\nA ticket:')
-                scrape_ticket_price_range(ticket_id, verbose=True)
+                scrape_ticket_price_range(ticket_id)
                 has_scraped = True
                 break
         if has_scraped:
