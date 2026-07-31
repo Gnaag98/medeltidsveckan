@@ -49,7 +49,7 @@
 						<ol class="events">
 							{% for event in time_slot['events'] %}
 							<li>
-								<section class="event-card"
+								<button command="show-modal" commandfor="event-{{ event['id'] }}-modal" class="event-card"
 									data-official=
 									{% if event['category'] == 'inofficiell' %}
 									"false"
@@ -57,31 +57,101 @@
 									"true"
 									{% endif %}
 								>
-									<div class="upper">
-										<div class="top">
-											{% if 'owner' in event %}
-											<p class="owner">{{ event['owner'] }}</p>
-											{% endif %}
-											<span class="time">{{ event['start_time'] }}</span>
+									<article>
+										<div class="body">
+											<div class="details">
+												{% if 'owner' in event %}
+												<span class="owner">{{ event['owner'] }}</span>
+												{% endif %}
+												<span class="time">{{ event['start_time'] }}</span>
+											</div>
+											<h2 class="title">{{ event['title'] }}</h2>
 										</div>
-										<h2 class="title">{{ event['title'] }}</h2>
-									</div>
-									<div class="lower">
-										{% if 'category' in event %}
-										<span class="category">{{ event['category'] }}</span>
-										{% endif %}
-										{% if 'price' in event or 'min_price' in event %}
-										<a href="https://www.nortic.se/ticket/show/{{ event['ticket_id'] }}" class="ticket price">
-											{% if 'price' in event %}
-											{{ event['price'] }}
-											{% else %}
-											{{ event['min_price'] }}-{{ event['max_price'] }}
+										<footer>
+											{% if 'category' in event %}
+											<span class="category">{{ event['category'] }}</span>
 											{% endif %}
-											kr
-										</a>
-										{% endif %}
-									</div>
-								</section>
+											{% if 'price' in event or 'min_price' in event %}
+											<a href="https://www.nortic.se/ticket/show/{{ event['ticket_id'] }}" class="ticket price">
+												{% if 'price' in event %}
+												{{ event['price'] }}
+												{% else %}
+												{{ event['min_price'] }}-{{ event['max_price'] }}
+												{% endif %}
+												kr
+											</a>
+											{% endif %}
+										</footer>
+									</article>
+								</button>
+								<dialog id="event-{{ event['id'] }}-modal" closedby="any" class="event-modal">
+									{% if 'image_url' in event %}
+									<img src="{{ event['image_url'] }}" alt="eventomslagsbild" loading="lazy">
+									{% endif %}
+									<article>
+										<header>
+											{% if 'owner' in event %}
+											<span class="owner">{{ event['owner'] }}</span>
+											{% endif %}
+											<h2 class="title">{{ event['title'] }}</h2>
+										</header>
+										<div class="body">
+											<div class="left">
+												<details name="event-{{ event['id'] }}" open>
+													<summary>Beskrivning</summary>
+													{{ event['html_escaped_description']|safe }}
+												</details>
+												<details name="event-{{ event['id'] }}">
+													<summary>Övriga visningstider</summary>
+													<table>
+														<thead>
+															<tr>
+																<th scope="col">Dag</th>
+																<th scope="col">Tid</th>
+																<th scope="col">Show</th>
+															</tr>
+														</thead>
+														<tbody>
+															{% for sibling in event['siblings'] %}
+															<tr>
+																<td>{{ sibling['weekday'] }}</td>
+																<td>{{ sibling['start_time'] }}</td>
+																<td>{{ sibling['title'] }}</td>
+															</tr>
+															{% endfor %}
+														</tbody>
+													</table>
+												</details>
+											</div>
+											<div class="right">
+												<div>
+													<span>
+														<span class="weekday">{{ event['weekday'] }}</span>
+														<span class="date">{{ event['date'] }}</span>
+													</span>
+													{% if 'end_time' in event %}
+													<span class="time-range">
+														{{ event['start_time'] }}-{{ event['end_time'] }}
+													</span>
+													{% else %}
+													<span class="time">
+														{{ event['start_time'] }}
+													</span>
+													{% endif %}
+													<span class="location">{{ event['location'] }}</span>
+												</div>
+												{% if 'price' in event or 'min_price' in event %}
+												<a href="https://www.nortic.se/ticket/show/{{ event['ticket_id'] }}" class="ticket">Köp biljett</a>
+												{% endif %}
+											</div>
+										</div>
+										<footer>
+											<button command="close" commandfor="event-{{ event['id'] }}-modal">
+												Stäng
+											</button>
+										</footer>
+									</article>
+								</dialog>
 							</li>
 							{% endfor %}
 						</ol>

@@ -307,6 +307,7 @@ def _scrape_occasion(occasion: dict) -> dict:
             occasion['siblings'].append(
                 {
                     'date': str(date),
+                    'weekday': unescape(sibling['day']),
                     'start_time': unescape(sibling['time']),
                     'title': unescape(sibling['title']),
                 }
