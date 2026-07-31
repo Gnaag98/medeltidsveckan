@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Medelveckan</title>
+
+	<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+	<script type="module" src="{{ url_for('static', filename='javascript/main.js') }}"></script>
+</head>
+<body>
+	<h1>Program (MTV <s>+ IMTV</s>)</h1>
+<header>
+	<nav>
+		<ol class="weekday-buttons">
+			{% for day in schedule['days'] %}
+			<li><button>{{ day['weekday'] }}</button></li>
+			{% endfor %}
+		</ol>
+	</nav>
+</header>
+<main>
+	<ol id="days">
+		{% for day in schedule['days'] %}
+		<li>
+			<section class="day">
+				<hgroup class="day-header">
+					<h2 class="weekday">{{ day['weekday'] }}</h2>
+					<p class="date">{{ day['date'] }}</p>
+				</hgroup>
+				<details open class="opening-hours">
+					<summary>Öppettider</summary>
+					<ol class="venues">
+						{% for venue in day['venues'] %}
+						<li>
+							<span class="time-range">
+								{{ venue['start_time'] }}-{{ venue['end_time'] }}
+							</span>
+							<button class="title">{{ venue['title'] }}</button>
+						</li>
+						{% endfor %}
+					</ol>
+				</details>
+				<ol class="time-slots">
+					{% for time_slot in day['time_slots'] %}
+					<li class="time-slot">
+						<span class="time">{{ time_slot['time'] }}</span>
+						<ol class="events">
+							{% for event in time_slot['events'] %}
+							<li>
+								<section class="event-card">
+									<div class="upper">
+										<div class="top">
+											{% if 'owner' in event %}
+											<p class="owner">{{ event['owner'] }}</p>
+											{% endif %}
+											<span class="time">{{ event['start_time'] }}</span>
+										</div>
+										<h2 class="title">{{ event['title'] }}</h2>
+									</div>
+									<div class="lower">
+										{% if 'category' in event %}
+										<span class="category">{{ event['category'] }}</span>
+										{% endif %}
+										{% if 'price' in event or 'min_price' in event %}
+										<div class="ticket">
+											<a href="https://www.nortic.se/ticket/show/{{ event['ticket_id'] }}" class="ticket-link price">
+												{% if 'price' in event %}
+												{{ event['price'] }}
+												{% else %}
+												{{ event['min_price'] }}-{{ event['max_price'] }}
+												{% endif %}
+												kr
+											</a>
+										</div>
+										{% endif %}
+									</div>
+								</section>
+							</li>
+							{% endfor %}
+						</ol>
+					</li>
+					{% endfor %}
+				</ol>
+			</section>
+		</li>
+		{% endfor %}
+	</ol>
+</main>
+<footer></footer>
+</body>
+</html>

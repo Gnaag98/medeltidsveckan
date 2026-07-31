@@ -1,0 +1,83 @@
+/* CSS reset */
+
+*, *::before, *::after {
+	box-sizing: border-box;
+}
+
+* {
+	margin: 0;
+	padding: 0;
+	font: inherit;
+}
+
+body {
+	min-height: 100vh;
+}
+
+/* end CSS reset */
+
+:root {
+	--gap: 0.5rem;
+}
+
+.weekday-buttons {
+	list-style: none;
+	display: flex;
+}
+
+.venues {
+	list-style: none;
+}
+
+.time-slots {
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: var(--gap);
+}
+
+.time-slot {
+	display: grid;
+	grid-template-columns: 7ch 1fr;
+
+	.time {
+		text-align: center;
+	}
+}
+
+.events {
+	list-style: none;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, 20ch);
+	gap: var(--gap);
+}
+
+.event-card {
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+
+	outline: 1px solid black;
+
+	.upper {
+		flex-grow: 1;
+	}
+
+	.lower {
+		display: flex;
+	}
+
+	.top {
+		display: flex;
+
+		.time {
+			flex-grow: 1;
+			text-align: end;
+		}
+	}
+}
+
+.ticket {
+	flex-grow: 1;
+	text-align: end;
+}
