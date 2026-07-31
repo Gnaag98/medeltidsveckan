@@ -1,10 +1,9 @@
 import datetime
 import json
 import logging
-from collections.abc import Callable
 from html import unescape
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,62 +27,24 @@ class Sibling(TypedDict):
 
 def scrape(
     schedule_filepath: Path,
-    events_filepath: Path,
-    venues_filepath: Path,
 ):
     # Parse and save simple schedule.
     # """
     schedule = scrape_schedule()
-    with open(schedule_filepath, 'w', encoding='utf-8') as file:
-        json.dump(schedule, file, ensure_ascii=False, indent=4)
-    logger.info('Schedule saved.')
     # """
 
     # Get and save events and venues.
     # """
-    with open(schedule_filepath, 'r') as file:
-        schedule = json.load(file)
-
-    events = scrape_events(schedule)
-    with open(events_filepath, 'w', encoding='utf-8') as file:
-        json.dump(events, file, ensure_ascii=False, indent=4)
-    logger.info('Events saved')
+    scrape_events(schedule)
 
     # Get and save venues (opening hours).
-    venues = scrape_venues(schedule)
-    with open(venues_filepath, 'w', encoding='utf-8') as file:
-        json.dump(venues, file, ensure_ascii=False, indent=4)
-    logger.info('Venues saved')
+    scrape_venues(schedule)
     # """
 
-    # Update saved events with ticket prices.
-    # """
-    add_ticket_prices(events_filepath)
-    # """
+    with open(schedule_filepath, 'w', encoding='utf-8') as file:
+        json.dump(schedule, file, ensure_ascii=False, indent=4)
+    logger.info('Schedule saved.')
 
-    # Update saved events and venues with sibling IDs.
-    # """
-    with open(schedule_filepath, 'r', encoding='utf-8') as file:
-        schedule = json.load(file)
-
-    # Update events.
-    logger.info('Updating saved events with sibling IDs')
-    with open(events_filepath, 'r', encoding='utf-8') as file:
-        events = json.load(file)
-    add_sibling_ids(events, schedule, _find_event_sibling_id)
-    with open(events_filepath, 'w', encoding='utf-8') as file:
-        json.dump(events, file, ensure_ascii=False, indent=4)
-    logger.info('Updated saved events with sibling IDs')
-
-    # Update venues.
-    logger.info('Updating saved venues with sibling IDs')
-    with open(venues_filepath, 'r', encoding='utf-8') as file:
-        venues = json.load(file)
-        add_sibling_ids(venues, schedule, _find_venue_sibling_id)
-    with open(venues_filepath, 'w', encoding='utf-8') as file:
-        json.dump(venues, file, ensure_ascii=False, indent=4)
-    logger.info('Updated saved venues with sibling IDs')
-    # """
 
 
 def scrape_schedule() -> dict:
@@ -99,14 +60,16 @@ def scrape_schedule() -> dict:
 
     # Get days.
     days = []
+    num_venues = 0
     num_events = 0
     day_elements = soup.select('.day')
     for day_index, day_element in enumerate(day_elements):
         date_string = day_element.get('id').removeprefix('date-')
         day = {
             'date': date_string,
+            'weekday': weekdays[day_index],
             'venues': [],
-            'events': [],
+            'time_slots': [],
         }
         logger.debug(f'Scraping {weekdays[day_index]} {date_string}')
 
@@ -125,10 +88,16 @@ def scrape_schedule() -> dict:
                         'end_time': end_time,
                     }
                 )
+                num_venues += 1
 
-        # Get events.
+        # Get time slots.
         time_views = day_element.select('.time-view')
         for time_view in time_views:
+            time_slot = {
+                'time': time_view.select_one('.time-header h4').string,
+                'events': [],
+            }
+            # Get events.
             for article in time_view.select('article'):
                 event = {}
                 id_ = int(article['data-pid'])
@@ -138,78 +107,70 @@ def scrape_schedule() -> dict:
                 event['id'] = id_
                 event['title'] = title
                 event['start_time'] = start_time
-                if footer := article.select_one('.card-footer').string:
-                    event['category'] = footer.strip()
-                day['events'].append(event)
+                category = next(article.select_one('.card-footer').stripped_strings, 'Övrigt')
+                # The category is missing if the link text is caught instead.
+                if category == 'Köp biljett':
+                    category = 'Övrigt'
+                event['category'] = category
+                time_slot['events'].append(event)
                 num_events += 1
+            day['time_slots'].append(time_slot)
 
         days.append(day)
     logger.info(f'Schedule contains {num_events} events')
-    return days
+    return {
+        'num_venues': num_venues,
+        'num_events': num_events,
+        'days': days,
+    }
 
 
 def scrape_events(schedule: dict):
     logger.info('Scraping events')
-    return _scrape_occasions(schedule, 'event')
+
+    num_events = schedule['num_events']
+    num_scraped = 0
+    for day in schedule['days']:
+        for time_slot in day['time_slots']:
+            for event in time_slot['events']:
+                try:
+                    _scrape_occasion(event)
+                    if ticket_id := event.get('ticket_id'):
+                        _scrape_ticket_price_range(event, ticket_id)
+                    for sibling in event.get('siblings', []):
+                        sibling['id'] = _find_event_sibling_id(
+                            event=event, sibling=sibling, schedule=schedule
+                        )
+
+                # Skip failed scrapes.
+                except TimeoutRetryError as exception:
+                    logger.error(f'Failed to scrape event {event['id']}: {exception}')
+
+                num_scraped += 1
+                if (num_scraped + 1) % 20 == 0 or num_scraped == num_events - 1:
+                    logger.info(f'{num_scraped + 1}/{num_events} events scraped')
 
 
 def scrape_venues(schedule: dict):
     logger.info('Scraping venues')
-    return _scrape_occasions(schedule, 'venue')
 
+    num_venues = schedule['num_venues']
+    num_scraped = 0
+    for day in schedule['days']:
+        for venue in day['venues']:
+            try:
+                _scrape_occasion(venue)
+                for sibling in venue.get('siblings', []):
+                    sibling['id'] = _find_venue_sibling_id(
+                        venue=venue, sibling=sibling, schedule=schedule
+                    )
+            # Skip failed scrapes.
+            except TimeoutRetryError as exception:
+                logger.error(f'Failed to scrape venue {venue['id']}: {exception}')
 
-def scrape_ticket_price_range(ticket_id: int) -> tuple[int, int] | None:
-    logger.debug(f'Scraping ticket {ticket_id}')
-
-    # Get json.
-    url = f'https://www.nortic.se/api/json/show/{ticket_id}'
-    response = _get_request(url)
-    response.raise_for_status()
-    data = response.json()
-
-    # Get price range.
-    events = data['events']
-    if len(events) == 0:
-        logger.warning(f'Found no events for ticket {ticket_id}')
-        return None
-    show = events[0]['shows'][0]
-    min_price = int(float(show['minPrice']))
-    max_price = int(float(show['maxPrice']))
-
-    return (min_price, max_price)
-
-
-def add_ticket_prices(events_filepath: Path):
-    logger.info('Updating saved events with ticket prices')
-    with open(events_filepath, 'r', encoding='utf-8') as file:
-        events = json.load(file)
-    for i, event in enumerate(events):
-        if ticket_id := event.get('ticket_id'):
-            logger.debug(f'Adding ticket price to event {event["id"]} ({i + 1}/{len(events)})')
-            if price_range := scrape_ticket_price_range(ticket_id):
-                min_price = price_range[0]
-                max_price = price_range[1]
-                if min_price == max_price:
-                    event['price'] = max_price
-                else:
-                    event['min_price'] = min_price
-                    event['max_price'] = max_price
-
-        if (i + 1) % 20 == 0 or i == len(events) - 1:
-            logger.info(f'{i + 1}/{len(events)} tickets scraped')
-
-    with open(events_filepath, 'w', encoding='utf-8') as file:
-        json.dump(events, file, ensure_ascii=False, indent=4)
-    logger.info('Updated saved events with ticket prices')
-
-
-def add_sibling_ids(occasions: dict, schedule: dict, find_occasion_sibling_id: Callable):
-    for occasion in occasions:
-        if siblings := occasion.get('siblings'):
-            for sibling in siblings:
-                sibling_id = find_occasion_sibling_id(sibling, schedule)
-                sibling['sibling_id'] = sibling_id
-                logger.debug(f'Added sibling id {sibling_id} to {occasion["id"]}')
+            num_scraped += 1
+            if (num_scraped + 1) % 20 == 0 or num_scraped == num_venues - 1:
+                logger.info(f'{num_scraped + 1}/{num_venues} venues scraped')
 
 
 def _get_request(url: str, *, params=None) -> Response:
@@ -227,23 +188,21 @@ def _get_request(url: str, *, params=None) -> Response:
     raise TimeoutRetryError(f'Too many timeouts for GET request to {url}')
 
 
-def _scrape_occasion(id_: int) -> dict:
+def _scrape_occasion(occasion: dict) -> dict:
+    logger.debug(f'Scraping details for occasion {occasion['id']}')
     # Get json.
     url = 'https://www.medeltidsveckan.se/'
     response = _get_request(
         url,
         params={
             'action': 'fetch-programme-item',
-            'pid': id_,
+            'pid': occasion['id'],
         },
     )
     response.raise_for_status()
     details = response.json()
 
     # Parse details.
-    occasion = {
-        'id': id_,
-    }
     if image_url := details.get('image'):
         occasion['image_url'] = image_url
     if item_owner := details['header']['item_owner']:
@@ -258,12 +217,10 @@ def _scrape_occasion(id_: int) -> dict:
             occasion['siblings'].append(
                 {
                     'date': str(date),
-                    'weekday': unescape(sibling['day']),
                     'start_time': unescape(sibling['time']),
                     'title': unescape(sibling['title']),
                 }
             )
-    occasion['weekday'] = details['sidebar']['dayName']
     occasion['date'] = details['sidebar']['date']
     start, end = details['sidebar']['time'].split(' - ')
     occasion['start_time'] = unescape(start)
@@ -272,110 +229,52 @@ def _scrape_occasion(id_: int) -> dict:
     if ticket_url := details['sidebar']['ticket_link']:
         ticket_id = int(ticket_url.split('/')[-1])
         occasion['ticket_id'] = ticket_id
-    return occasion
 
 
-def _scrape_occasions(schedule: dict, type_: Literal['event', 'venue']):
-    ids: list[int] = []
-    for day in schedule:
-        for occasion in day[f'{type_}s']:
-            ids.append(occasion['id'])
+def _scrape_ticket_price_range(event: dict, ticket_id: int) -> tuple[int, int] | None:
+    logger.debug(f'Scraping ticket {ticket_id}')
 
-    occasions = []
-    for i, id_ in enumerate(ids):
-        logger.debug(f'Scraping details for {type_} {id_} ({i + 1}/{len(ids)})')
+    # Get json.
+    url = f'https://www.nortic.se/api/json/show/{ticket_id}'
+    response = _get_request(url)
+    response.raise_for_status()
+    data = response.json()
 
-        try:
-            occasion = _scrape_occasion(id_)
-            occasions.append(occasion)
-        # Skip failed scrapes.
-        except TimeoutRetryError as exception:
-            logger.error(f'Failed to get {type_} {id_}: {exception}')
-            continue
+    # Get price range.
+    events = data['events']
+    if len(events) == 0:
+        logger.warning(f'Found no events for ticket {ticket_id}')
+        return None
+    show = events[0]['shows'][0]
+    min_price = int(float(show['minPrice']))
+    max_price = int(float(show['maxPrice']))
 
-        if (i + 1) % 20 == 0 or i == len(ids) - 1:
-            logger.info(f'{i + 1}/{len(ids)} {type_}s scraped')
+    if min_price == max_price:
+        event['price'] = min_price
+    else:
+        event['min_price'] = min_price
+        event['max_price'] = max_price
 
-    logger.info(f'Scraped {len(occasions)}/{len(ids)} {type_}s')
-    return occasions
 
+def _find_event_sibling_id(event: dict, sibling: dict, schedule: dict):
 
-def _find_event_sibling_id(sibling: Sibling, schedule: dict) -> int:
+    day = next(day for day in schedule['days'] if day['date'] == sibling['date'])
+
     start_hour, start_minute = sibling['start_time'].split(':')
     earliest_half_hour = int(start_minute) // 30 * 30
     sibling_time_slot = f'{start_hour}:{earliest_half_hour:02d}'
+    time_slot = next(time_slot for time_slot in day['time_slots'] if time_slot['time'] == sibling_time_slot)
 
-    day = next(
-        (day for day in schedule if day['date'] == sibling['date']),
-        None,
+    sibling = next(event for event in time_slot['events'] if event['title'] == sibling['title'])
+    return sibling['id']
+
+
+def _find_venue_sibling_id(venue: dict, sibling: dict, schedule: dict):
+
+    day = next(day for day in schedule['days'] if day['date'] == sibling['date'])
+
+    sibling = next(
+        venue for venue in day['venues']
+        if venue['title'] == sibling['title'] and venue['start_time'] == sibling['start_time']
     )
-
-    event = None
-    for occasion in day['events']:
-        start_hour, start_minute = sibling['start_time'].split(':')
-        earliest_half_hour = int(start_minute) // 30 * 30
-        occasion_time_slot = f'{start_hour}:{earliest_half_hour:02d}'
-
-        if occasion['title'] == sibling['title'] and occasion_time_slot == sibling_time_slot:
-            event = occasion
-            break
-
-    return event['id']
-
-
-def _find_venue_sibling_id(sibling: Sibling, schedule: dict) -> int:
-    day = next(
-        (day for day in schedule if day['date'] == sibling['date']),
-        None,
-    )
-
-    venue = next(
-        (
-            occasion
-            for occasion in day['venues']
-            if occasion['title'] == sibling['title']
-            and occasion['start_time'] == sibling['start_time']
-        ),
-        None,
-    )
-
-    return venue['id']
-
-
-def main():
-    """Scrapes schedule, some events and a ticket, and only prints the result."""
-    logging.basicConfig(
-        filename=f'{__file__}.log',
-        filemode='w',
-        level=logging.DEBUG,
-        style='{',
-        format='{asctime}:{levelname}:{name}:{filename}:{lineno}:{message}',
-        datefmt='%Y-%m-%d %H:%M:%S',
-    )
-    console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
-    console.setFormatter(logging.Formatter('%(levelname)-8s %(message)s'))
-    logging.getLogger().addHandler(console)
-
-    # Scrape schedule
-    print('The schedule:')
-    schedule = scrape_schedule()
-
-    # Scrape events until a ticket with a price is found
-    has_scraped = False
-    print('\nSome events:')
-    for day in schedule:
-        for event in day['events']:
-            event_id = event['id']
-            event = _scrape_occasion(event_id)
-            if ticket_id := event.get('ticket_id'):
-                print('\nA ticket:')
-                scrape_ticket_price_range(ticket_id)
-                has_scraped = True
-                break
-        if has_scraped:
-            break
-
-
-if __name__ == '__main__':
-    main()
+    return sibling['id']
