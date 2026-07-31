@@ -1,9 +1,11 @@
 import datetime
+import itertools
 import json
 import logging
 from html import unescape
 from pathlib import Path
 from typing import TypedDict
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,23 +30,20 @@ class Sibling(TypedDict):
 def scrape(
     schedule_filepath: Path,
 ):
-    # Parse and save simple schedule.
     # """
     schedule = scrape_schedule()
-    # """
-
-    # Get and save events and venues.
-    # """
     scrape_events(schedule)
-
-    # Get and save venues (opening hours).
     scrape_venues(schedule)
+    # """
+
+    # """
+    unofficial_schedule = scrape_unofficial_schedule()
+    combine_schedules(schedule, unofficial_schedule)
     # """
 
     with open(schedule_filepath, 'w', encoding='utf-8') as file:
         json.dump(schedule, file, ensure_ascii=False, indent=4)
     logger.info('Schedule saved.')
-
 
 
 def scrape_schedule() -> dict:
@@ -117,7 +116,7 @@ def scrape_schedule() -> dict:
             day['time_slots'].append(time_slot)
 
         days.append(day)
-    logger.info(f'Schedule contains {num_events} events')
+    logger.info(f'Schedule contains {num_events} events and {num_venues} venues')
     return {
         'num_venues': num_venues,
         'num_events': num_events,
@@ -144,7 +143,7 @@ def scrape_events(schedule: dict):
 
                 # Skip failed scrapes.
                 except TimeoutRetryError as exception:
-                    logger.error(f'Failed to scrape event {event['id']}: {exception}')
+                    logger.error(f'Failed to scrape event {event["id"]}: {exception}')
 
                 num_scraped += 1
                 if (num_scraped + 1) % 20 == 0 or num_scraped == num_events - 1:
@@ -166,11 +165,103 @@ def scrape_venues(schedule: dict):
                     )
             # Skip failed scrapes.
             except TimeoutRetryError as exception:
-                logger.error(f'Failed to scrape venue {venue['id']}: {exception}')
+                logger.error(f'Failed to scrape venue {venue["id"]}: {exception}')
 
             num_scraped += 1
             if (num_scraped + 1) % 20 == 0 or num_scraped == num_venues - 1:
                 logger.info(f'{num_scraped + 1}/{num_venues} venues scraped')
+
+
+def scrape_unofficial_schedule() -> dict:
+    logger.info('Scraping unofficial schedule')
+
+    # Get page.
+    url = 'https://imtv.se/'
+    response = _get_request(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+
+    # Get days.
+    days = []
+    num_events = 0
+    for day_header, day_body in zip(soup.select('dt'), soup.select('dd')):
+        # Get date
+        header_parts = day_header.string.split(' ')
+        # Stop if no more weekday-date pairs to parse.
+        if len(header_parts) < 2:
+            break
+        date_parts = header_parts[1].split('/')
+        date = f'{datetime.datetime.now(tz=ZoneInfo("Europe/Stockholm")).year}-{int(date_parts[1]):02d}-{int(date_parts[0]):02d}'
+
+        day = {
+            'date': date,
+            'events': [],
+        }
+        for event_element in day_body.select('li'):
+            event = {
+                'id': f'i{num_events}',
+            }
+
+            event['title'] = unescape(event_element.h3.string)
+
+            start_time = unescape(event_element.select_one('.time').string)
+            event['start_time'] = start_time
+
+            start_hour, start_minute = start_time.split(':')
+            earliest_half_hour = int(start_minute) // 30 * 30
+            event['time_slot'] = f'{start_hour}:{earliest_half_hour:02d}'
+
+            event['category'] = 'inofficiell'
+
+            modal = event_element.select_one('.modal-content')
+            event['owner'] = unescape(next(itertools.islice(modal.stripped_strings, 2, None)))
+
+            description_element = event_element.p
+            description_parts = [string for string in description_element.stripped_strings]
+            event['html_escaped_description'] = description_parts[0]
+
+            if len(description_parts) > 1:
+                event['link'] = unescape(description_element.a['href'])
+
+            day['events'].append(event)
+            num_events += 1
+
+        days.append(day)
+
+    logger.info(f'Unofficial schedule contains {num_events} events')
+    return {
+        'num_events': num_events,
+        'days': days,
+    }
+
+
+def combine_schedules(schedule: dict, unofficial_schedule: dict):
+    for unofficial_day in unofficial_schedule['days']:
+        day = next(day for day in schedule['days'] if day['date'] == unofficial_day['date'])
+
+        for event in unofficial_day['events']:
+            time_slot = next(
+                (
+                    time_slot
+                    for time_slot in day['time_slots']
+                    if time_slot['time'] == event['time_slot']
+                ),
+                None,
+            )
+            if time_slot:
+                time_slot['events'].append(event)
+            else:
+                day['time_slots'].append(
+                    {
+                        'time': event['time_slot'],
+                        'events': [event],
+                    }
+                )
+
+        # Sort time slots
+        day['time_slots'].sort(key=lambda time_slot: time_slot['time'])
+        # Sort events
+        for time_slot in day['time_slots']:
+            time_slot['events'].sort(key=lambda event: event['start_time'])
 
 
 def _get_request(url: str, *, params=None) -> Response:
@@ -189,7 +280,7 @@ def _get_request(url: str, *, params=None) -> Response:
 
 
 def _scrape_occasion(occasion: dict) -> dict:
-    logger.debug(f'Scraping details for occasion {occasion['id']}')
+    logger.debug(f'Scraping details for occasion {occasion["id"]}')
     # Get json.
     url = 'https://www.medeltidsveckan.se/'
     response = _get_request(
@@ -207,7 +298,6 @@ def _scrape_occasion(occasion: dict) -> dict:
         occasion['image_url'] = image_url
     if item_owner := details['header']['item_owner']:
         occasion['owner'] = unescape(item_owner)
-    occasion['title'] = unescape(details['header']['title'])
     occasion['html_escaped_description'] = details['content']['description']
     if siblings := details['content']['siblings']:
         occasion['siblings'] = []
@@ -263,7 +353,9 @@ def _find_event_sibling_id(event: dict, sibling: dict, schedule: dict):
     start_hour, start_minute = sibling['start_time'].split(':')
     earliest_half_hour = int(start_minute) // 30 * 30
     sibling_time_slot = f'{start_hour}:{earliest_half_hour:02d}'
-    time_slot = next(time_slot for time_slot in day['time_slots'] if time_slot['time'] == sibling_time_slot)
+    time_slot = next(
+        time_slot for time_slot in day['time_slots'] if time_slot['time'] == sibling_time_slot
+    )
 
     sibling = next(event for event in time_slot['events'] if event['title'] == sibling['title'])
     return sibling['id']
@@ -274,7 +366,8 @@ def _find_venue_sibling_id(venue: dict, sibling: dict, schedule: dict):
     day = next(day for day in schedule['days'] if day['date'] == sibling['date'])
 
     sibling = next(
-        venue for venue in day['venues']
+        venue
+        for venue in day['venues']
         if venue['title'] == sibling['title'] and venue['start_time'] == sibling['start_time']
     )
     return sibling['id']

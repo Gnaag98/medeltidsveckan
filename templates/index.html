@@ -10,7 +10,7 @@
 	<script type="module" src="{{ url_for('static', filename='javascript/main.js') }}"></script>
 </head>
 <body>
-	<h1>Program (MTV <s>+ IMTV</s>)</h1>
+	<h1>Program (MTV + IMTV)</h1>
 <header>
 	<nav>
 		<ol class="weekday-buttons">
@@ -49,7 +49,14 @@
 						<ol class="events">
 							{% for event in time_slot['events'] %}
 							<li>
-								<section class="event-card">
+								<section class="event-card"
+									data-official=
+									{% if event['category'] == 'inofficiell' %}
+									"false"
+									{% else %}
+									"true"
+									{% endif %}
+								>
 									<div class="upper">
 										<div class="top">
 											{% if 'owner' in event %}
@@ -64,16 +71,14 @@
 										<span class="category">{{ event['category'] }}</span>
 										{% endif %}
 										{% if 'price' in event or 'min_price' in event %}
-										<div class="ticket">
-											<a href="https://www.nortic.se/ticket/show/{{ event['ticket_id'] }}" class="ticket-link price">
-												{% if 'price' in event %}
-												{{ event['price'] }}
-												{% else %}
-												{{ event['min_price'] }}-{{ event['max_price'] }}
-												{% endif %}
-												kr
-											</a>
-										</div>
+										<a href="https://www.nortic.se/ticket/show/{{ event['ticket_id'] }}" class="ticket price">
+											{% if 'price' in event %}
+											{{ event['price'] }}
+											{% else %}
+											{{ event['min_price'] }}-{{ event['max_price'] }}
+											{% endif %}
+											kr
+										</a>
 										{% endif %}
 									</div>
 								</section>
